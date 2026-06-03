@@ -198,7 +198,7 @@ jobs:
             -x ".git/*" "*.zip" "README.md"
 
       - name: رفع الناتج
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: NetHunter-Kernel-secret-MIUI14
           path: |
