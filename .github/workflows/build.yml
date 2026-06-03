@@ -1,1 +1,207 @@
+name: NetHunter Kernel - secret MIUI14
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      - name: تثبيت الأدوات
+        run: |
+          sudo apt update -y
+          sudo apt install -y \
+            git make bc bison flex \
+            libssl-dev libelf-dev \
+            python3 python3-pip \
+            build-essential ccache \
+            zip unzip curl wget \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
+      - name: تنزيل Clang 17
+        run: |
+          mkdir -p $HOME/clang
+          wget -q \
+            https://github.com/ZyCromerZ/Clang/releases/download/17.0.0-20230614-release/Clang-17.0.0-20230614.tar.gz \
+            -O clang.tar.gz
+          tar -xf clang.tar.gz -C $HOME/clang
+          echo "$HOME/clang/bin" >> $GITHUB_PATH
+
+      - name: تنزيل GCC 64bit
+        run: |
+          git clone --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git \
+            $HOME/gcc64
+
+      - name: تنزيل GCC 32bit
+        run: |
+          git clone --depth=1 \
+            https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git \
+            $HOME/gcc32
+
+      - name: إضافة NetHunter Config
+        run: |
+          cat >> arch/arm64/configs/rosemary_defconfig << 'EOF'
+
+          # ======= NetHunter Features =======
+
+          # WiFi Monitor Mode + Packet Injection
+          CONFIG_CFG80211=y
+          CONFIG_CFG80211_WEXT=y
+          CONFIG_MAC80211=y
+          CONFIG_MAC80211_MESH=y
+          CONFIG_RFKILL=y
+
+          # Bluetooth Attacks
+          CONFIG_BT=y
+          CONFIG_BT_RFCOMM=y
+          CONFIG_BT_RFCOMM_TTY=y
+          CONFIG_BT_BNEP=y
+          CONFIG_BT_BNEP_MC_FILTER=y
+          CONFIG_BT_BNEP_PROTO_FILTER=y
+          CONFIG_BT_HIDP=y
+          CONFIG_BT_LE=y
+
+          # HID Attacks - USB Keyboard Emulation
+          CONFIG_USB_CONFIGFS=y
+          CONFIG_USB_CONFIGFS_F_HID=y
+          CONFIG_USB_CONFIGFS_F_SERIAL=y
+          CONFIG_USB_CONFIGFS_MASS_STORAGE=y
+          CONFIG_HID=y
+          CONFIG_USB_HID=y
+          CONFIG_HID_GENERIC=y
+
+          # USB RNDIS - USB Network
+          CONFIG_USB_CONFIGFS_RNDIS=y
+          CONFIG_USB_ETH=y
+          CONFIG_USB_ETH_RNDIS=y
+
+          # VPN و Tunneling
+          CONFIG_TUN=y
+          CONFIG_PPP=y
+          CONFIG_PPP_ASYNC=y
+          CONFIG_PPP_SYNC_TTY=y
+          CONFIG_PPP_DEFLATE=y
+          CONFIG_PPP_BSDCOMP=y
+          CONFIG_PPPOE=y
+          CONFIG_PPTP=y
+
+          # Namespaces - مطلوب لـ NetHunter chroot
+          CONFIG_USER_NS=y
+          CONFIG_PID_NS=y
+          CONFIG_NET_NS=y
+          CONFIG_IPC_NS=y
+          CONFIG_UTS_NS=y
+
+          # OverlayFS - مطلوب لـ Magisk
+          CONFIG_OVERLAY_FS=y
+
+          # Network
+          CONFIG_PACKET=y
+          CONFIG_NETFILTER=y
+          CONFIG_NF_CONNTRACK=y
+          CONFIG_NETFILTER_ADVANCED=y
+
+          # Crypto
+          CONFIG_CRYPTO_SHA256=y
+          CONFIG_CRYPTO_SHA512=y
+          CONFIG_CRYPTO_AES=y
+          CONFIG_CRYPTO_CHACHA20POLY1305=y
+          EOF
+
+      - name: بناء الكيرنل
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export PATH="$HOME/clang/bin:$HOME/gcc64/bin:$HOME/gcc32/bin:$PATH"
+
+          ARGS=(
+            O=out
+            ARCH=arm64
+            CC=$HOME/clang/bin/clang
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            CROSS_COMPILE=$HOME/gcc64/bin/aarch64-linux-android-
+            CROSS_COMPILE_ARM32=$HOME/gcc32/bin/arm-linux-androideabi-
+            AR=$HOME/clang/bin/llvm-ar
+            NM=$HOME/clang/bin/llvm-nm
+            OBJCOPY=$HOME/clang/bin/llvm-objcopy
+            OBJDUMP=$HOME/clang/bin/llvm-objdump
+            STRIP=$HOME/clang/bin/llvm-strip
+            LD=$HOME/clang/bin/ld.lld
+            LLVM=1
+            LLVM_IAS=1
+          )
+
+          make "${ARGS[@]}" rosemary_defconfig
+          make -j$(nproc --all) "${ARGS[@]}" 2>&1 | tee out/build.log
+
+      - name: التحقق من نجاح البناء
+        run: |
+          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ] && \
+             [ ! -f out/arch/arm64/boot/Image.gz ] && \
+             [ ! -f out/arch/arm64/boot/Image ]; then
+            echo "فشل البناء!"
+            tail -50 out/build.log
+            exit 1
+          fi
+          echo "✅ تم البناء بنجاح!"
+
+      - name: تجهيز AnyKernel3
+        run: |
+          git clone --depth=1 \
+            https://github.com/osm0sis/AnyKernel3.git \
+            AnyKernel3
+
+          # نسخ الكيرنل
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/ 2>/dev/null || \
+          cp out/arch/arm64/boot/Image.gz AnyKernel3/ 2>/dev/null || \
+          cp out/arch/arm64/boot/Image AnyKernel3/
+
+          # نسخ dtbo إذا وجد
+          [ -f out/arch/arm64/boot/dtbo.img ] && \
+            cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+
+          cat > AnyKernel3/anykernel.sh << 'AKEOF'
+          properties() { '
+          kernel.string=NetHunter Kernel MIUI14
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=secret
+          device.name2=rosemary
+          device.name3=maltose
+          supported.versions=13
+          '; }
+
+          block=/dev/block/by-name/boot;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+          split_boot;
+          flash_boot;
+          AKEOF
+
+          cd AnyKernel3
+          zip -r9 \
+            ../NetHunter-secret-MIUI14-$(date +%Y%m%d).zip . \
+            -x ".git/*" "*.zip" "README.md"
+
+      - name: رفع الناتج
+        uses: actions/upload-artifact@v3
+        with:
+          name: NetHunter-Kernel-secret-MIUI14
+          path: |
+            NetHunter-*.zip
+            out/build.log
+          retention-days: 7
