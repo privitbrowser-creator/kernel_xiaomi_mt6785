@@ -9,7 +9,7 @@ jobs:
 
     steps:
       - name: Checkout Kernel Source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
@@ -23,7 +23,9 @@ jobs:
             build-essential ccache \
             zip unzip curl wget \
             gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu
+            binutils-aarch64-linux-gnu \
+            device-tree-compiler \
+            libncurses-dev
 
       - name: تنزيل Clang 17
         run: |
@@ -32,7 +34,6 @@ jobs:
             https://github.com/ZyCromerZ/Clang/releases/download/17.0.0-20230614-release/Clang-17.0.0-20230614.tar.gz \
             -O clang.tar.gz
           tar -xf clang.tar.gz -C $HOME/clang
-          echo "$HOME/clang/bin" >> $GITHUB_PATH
 
       - name: تنزيل GCC 64bit
         run: |
@@ -46,112 +47,162 @@ jobs:
             https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git \
             $HOME/gcc32
 
+      - name: إعداد متغيرات البيئة
+        run: |
+          echo "PATH=$HOME/clang/bin:$HOME/gcc64/bin:$HOME/gcc32/bin:$PATH" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+          echo "SUBARCH=arm64" >> $GITHUB_ENV
+          echo "CLANG_PATH=$HOME/clang/bin" >> $GITHUB_ENV
+          echo "GCC64=$HOME/gcc64/bin/aarch64-linux-android-" >> $GITHUB_ENV
+          echo "GCC32=$HOME/gcc32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
+
+      - name: تطبيق defconfig
+        run: |
+          export PATH=$HOME/clang/bin:$HOME/gcc64/bin:$HOME/gcc32/bin:$PATH
+          make \
+            O=out \
+            ARCH=arm64 \
+            CC=$HOME/clang/bin/clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=$HOME/gcc64/bin/aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=$HOME/gcc32/bin/arm-linux-androideabi- \
+            AR=$HOME/clang/bin/llvm-ar \
+            NM=$HOME/clang/bin/llvm-nm \
+            OBJCOPY=$HOME/clang/bin/llvm-objcopy \
+            OBJDUMP=$HOME/clang/bin/llvm-objdump \
+            STRIP=$HOME/clang/bin/llvm-strip \
+            LD=$HOME/clang/bin/ld.lld \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            rosemary_defconfig
+
       - name: إضافة NetHunter Config
         run: |
-          cat >> arch/arm64/configs/rosemary_defconfig << 'EOF'
+          export PATH=$HOME/clang/bin:$HOME/gcc64/bin:$HOME/gcc32/bin:$PATH
 
-          # ======= NetHunter Features =======
+          # WiFi Monitor Mode + Injection
+          scripts/config --file out/.config \
+            -e CFG80211 \
+            -e CFG80211_WEXT \
+            -e MAC80211 \
+            -e MAC80211_MESH \
+            -e RFKILL
 
-          # WiFi Monitor Mode + Packet Injection
-          CONFIG_CFG80211=y
-          CONFIG_CFG80211_WEXT=y
-          CONFIG_MAC80211=y
-          CONFIG_MAC80211_MESH=y
-          CONFIG_RFKILL=y
+          # Bluetooth
+          scripts/config --file out/.config \
+            -e BT \
+            -e BT_RFCOMM \
+            -e BT_RFCOMM_TTY \
+            -e BT_BNEP \
+            -e BT_BNEP_MC_FILTER \
+            -e BT_BNEP_PROTO_FILTER \
+            -e BT_HIDP \
+            -e BT_LE
 
-          # Bluetooth Attacks
-          CONFIG_BT=y
-          CONFIG_BT_RFCOMM=y
-          CONFIG_BT_RFCOMM_TTY=y
-          CONFIG_BT_BNEP=y
-          CONFIG_BT_BNEP_MC_FILTER=y
-          CONFIG_BT_BNEP_PROTO_FILTER=y
-          CONFIG_BT_HIDP=y
-          CONFIG_BT_LE=y
+          # HID Attacks
+          scripts/config --file out/.config \
+            -e HID \
+            -e USB_HID \
+            -e HID_GENERIC \
+            -e USB_CONFIGFS_F_HID \
+            -e USB_CONFIGFS_F_SERIAL \
+            -e USB_CONFIGFS_MASS_STORAGE
 
-          # HID Attacks - USB Keyboard Emulation
-          CONFIG_USB_CONFIGFS=y
-          CONFIG_USB_CONFIGFS_F_HID=y
-          CONFIG_USB_CONFIGFS_F_SERIAL=y
-          CONFIG_USB_CONFIGFS_MASS_STORAGE=y
-          CONFIG_HID=y
-          CONFIG_USB_HID=y
-          CONFIG_HID_GENERIC=y
+          # USB RNDIS
+          scripts/config --file out/.config \
+            -e USB_CONFIGFS_RNDIS \
+            -e USB_ETH_RNDIS
 
-          # USB RNDIS - USB Network
-          CONFIG_USB_CONFIGFS_RNDIS=y
-          CONFIG_USB_ETH=y
-          CONFIG_USB_ETH_RNDIS=y
+          # VPN / TUN
+          scripts/config --file out/.config \
+            -e TUN \
+            -e PPP \
+            -e PPP_ASYNC \
+            -e PPP_SYNC_TTY \
+            -e PPP_DEFLATE \
+            -e PPP_BSDCOMP \
+            -e PPPOE \
+            -e PPTP
 
-          # VPN و Tunneling
-          CONFIG_TUN=y
-          CONFIG_PPP=y
-          CONFIG_PPP_ASYNC=y
-          CONFIG_PPP_SYNC_TTY=y
-          CONFIG_PPP_DEFLATE=y
-          CONFIG_PPP_BSDCOMP=y
-          CONFIG_PPPOE=y
-          CONFIG_PPTP=y
+          # Namespaces للـ chroot
+          scripts/config --file out/.config \
+            -e USER_NS \
+            -e PID_NS \
+            -e NET_NS \
+            -e IPC_NS \
+            -e UTS_NS
 
-          # Namespaces - مطلوب لـ NetHunter chroot
-          CONFIG_USER_NS=y
-          CONFIG_PID_NS=y
-          CONFIG_NET_NS=y
-          CONFIG_IPC_NS=y
-          CONFIG_UTS_NS=y
-
-          # OverlayFS - مطلوب لـ Magisk
-          CONFIG_OVERLAY_FS=y
+          # OverlayFS
+          scripts/config --file out/.config \
+            -e OVERLAY_FS
 
           # Network
-          CONFIG_PACKET=y
-          CONFIG_NETFILTER=y
-          CONFIG_NF_CONNTRACK=y
-          CONFIG_NETFILTER_ADVANCED=y
+          scripts/config --file out/.config \
+            -e PACKET \
+            -e NETFILTER \
+            -e NF_CONNTRACK \
+            -e NETFILTER_ADVANCED
 
           # Crypto
-          CONFIG_CRYPTO_SHA256=y
-          CONFIG_CRYPTO_SHA512=y
-          CONFIG_CRYPTO_AES=y
-          CONFIG_CRYPTO_CHACHA20POLY1305=y
-          EOF
+          scripts/config --file out/.config \
+            -e CRYPTO_SHA256 \
+            -e CRYPTO_SHA512 \
+            -e CRYPTO_AES
+
+          # تحديث الـ config وحل التبعيات تلقائياً
+          make \
+            O=out \
+            ARCH=arm64 \
+            CC=$HOME/clang/bin/clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=$HOME/gcc64/bin/aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=$HOME/gcc32/bin/arm-linux-androideabi- \
+            AR=$HOME/clang/bin/llvm-ar \
+            NM=$HOME/clang/bin/llvm-nm \
+            OBJCOPY=$HOME/clang/bin/llvm-objcopy \
+            OBJDUMP=$HOME/clang/bin/llvm-objdump \
+            STRIP=$HOME/clang/bin/llvm-strip \
+            LD=$HOME/clang/bin/ld.lld \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            olddefconfig
 
       - name: بناء الكيرنل
         run: |
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export PATH="$HOME/clang/bin:$HOME/gcc64/bin:$HOME/gcc32/bin:$PATH"
-
-          ARGS=(
-            O=out
-            ARCH=arm64
-            CC=$HOME/clang/bin/clang
-            CLANG_TRIPLE=aarch64-linux-gnu-
-            CROSS_COMPILE=$HOME/gcc64/bin/aarch64-linux-android-
-            CROSS_COMPILE_ARM32=$HOME/gcc32/bin/arm-linux-androideabi-
-            AR=$HOME/clang/bin/llvm-ar
-            NM=$HOME/clang/bin/llvm-nm
-            OBJCOPY=$HOME/clang/bin/llvm-objcopy
-            OBJDUMP=$HOME/clang/bin/llvm-objdump
-            STRIP=$HOME/clang/bin/llvm-strip
-            LD=$HOME/clang/bin/ld.lld
-            LLVM=1
-            LLVM_IAS=1
-          )
-
-          make "${ARGS[@]}" rosemary_defconfig
-          make -j$(nproc --all) "${ARGS[@]}" 2>&1 | tee out/build.log
+          export PATH=$HOME/clang/bin:$HOME/gcc64/bin:$HOME/gcc32/bin:$PATH
+          make -j$(nproc --all) \
+            O=out \
+            ARCH=arm64 \
+            CC=$HOME/clang/bin/clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=$HOME/gcc64/bin/aarch64-linux-android- \
+            CROSS_COMPILE_ARM32=$HOME/gcc32/bin/arm-linux-androideabi- \
+            AR=$HOME/clang/bin/llvm-ar \
+            NM=$HOME/clang/bin/llvm-nm \
+            OBJCOPY=$HOME/clang/bin/llvm-objcopy \
+            OBJDUMP=$HOME/clang/bin/llvm-objdump \
+            STRIP=$HOME/clang/bin/llvm-strip \
+            LD=$HOME/clang/bin/ld.lld \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            2>&1 | tee out/build.log
 
       - name: التحقق من نجاح البناء
         run: |
-          if [ ! -f out/arch/arm64/boot/Image.gz-dtb ] && \
-             [ ! -f out/arch/arm64/boot/Image.gz ] && \
-             [ ! -f out/arch/arm64/boot/Image ]; then
-            echo "فشل البناء!"
-            tail -50 out/build.log
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            echo "KERNEL_IMG=out/arch/arm64/boot/Image.gz-dtb" >> $GITHUB_ENV
+            echo "✅ وجدنا Image.gz-dtb"
+          elif [ -f out/arch/arm64/boot/Image.gz ]; then
+            echo "KERNEL_IMG=out/arch/arm64/boot/Image.gz" >> $GITHUB_ENV
+            echo "✅ وجدنا Image.gz"
+          elif [ -f out/arch/arm64/boot/Image ]; then
+            echo "KERNEL_IMG=out/arch/arm64/boot/Image" >> $GITHUB_ENV
+            echo "✅ وجدنا Image"
+          else
+            echo "❌ فشل البناء - لم يوجد ملف الكيرنل"
+            tail -100 out/build.log
             exit 1
           fi
-          echo "✅ تم البناء بنجاح!"
 
       - name: تجهيز AnyKernel3
         run: |
@@ -159,12 +210,8 @@ jobs:
             https://github.com/osm0sis/AnyKernel3.git \
             AnyKernel3
 
-          # نسخ الكيرنل
-          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/ 2>/dev/null || \
-          cp out/arch/arm64/boot/Image.gz AnyKernel3/ 2>/dev/null || \
-          cp out/arch/arm64/boot/Image AnyKernel3/
+          cp ${{ env.KERNEL_IMG }} AnyKernel3/
 
-          # نسخ dtbo إذا وجد
           [ -f out/arch/arm64/boot/dtbo.img ] && \
             cp out/arch/arm64/boot/dtbo.img AnyKernel3/
 
